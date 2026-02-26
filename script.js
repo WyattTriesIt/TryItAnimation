@@ -662,7 +662,18 @@ currentMousePos = getCanvasPos(e);
     t.scaleX = (newWidth / baseWidth) * startScaleX;
     t.scaleY = (newHeight / baseHeight) * startScaleY;
   }
-    refreshCanvas();
+    let pendingRefresh = false;
+
+function requestRefresh() {
+    if (pendingRefresh) return;
+    pendingRefresh = true;
+    requestAnimationFrame(() => {
+        refreshCanvas();
+        pendingRefresh = false;
+    });
+}
+
+// replace all `refreshCanvas()` calls inside mousemove with `requestRefresh()`
     return;
 }
 
@@ -1015,45 +1026,34 @@ function drawObjectOnContext(obj, ctx2) {
 }
 
 function initObjectSurface(obj) {
+    if (!obj.modified && obj.surface) return; // 🟢 Skip if unchanged
 
-  const BASE_SIZE = 2048;
+    const BASE_SIZE = 2048;
+    const scaleX = Math.abs(obj.transform?.scaleX ?? 1);
+    const scaleY = Math.abs(obj.transform?.scaleY ?? 1);
+    const maxScale = Math.max(scaleX, scaleY);
+    const resolutionMultiplier = Math.max(1, maxScale);
+    const SURFACE_SIZE = Math.min(4096, Math.floor(BASE_SIZE * resolutionMultiplier));
 
-  const scaleX = Math.abs(obj.transform?.scaleX ?? 1);
-  const scaleY = Math.abs(obj.transform?.scaleY ?? 1);
+    if (!obj.surface || obj.surface.width !== SURFACE_SIZE || obj.surface.height !== SURFACE_SIZE) {
+        obj.surface = document.createElement("canvas");
+        obj.surface.width = SURFACE_SIZE;
+        obj.surface.height = SURFACE_SIZE;
+        obj.surfaceCtx = obj.surface.getContext("2d");
+        obj.surfaceCtx.imageSmoothingEnabled = true;
+        obj.surfaceCtx.imageSmoothingQuality = "high";
+    }
 
-  // Use the larger scale to determine surface resolution
-  const maxScale = Math.max(scaleX, scaleY);
+    const ctx2 = obj.surfaceCtx;
+    ctx2.clearRect(0, 0, SURFACE_SIZE, SURFACE_SIZE);
 
-  // Increase resolution only when scaling above 1
-  const resolutionMultiplier = Math.max(1, maxScale);
+    ctx2.save();
+    ctx2.translate(SURFACE_SIZE / 2, SURFACE_SIZE / 2);
 
-  const SURFACE_SIZE = Math.min(
-    4096, // safety cap so we don’t explode memory
-    Math.floor(BASE_SIZE * resolutionMultiplier)
-  );
+    drawObjectOnContext(obj, ctx2);
 
-  // Only recreate surface if size changed
-  if (!obj.surface || obj.surface.width !== SURFACE_SIZE) {
-    obj.surface = document.createElement("canvas");
-    obj.surface.width = SURFACE_SIZE;
-    obj.surface.height = SURFACE_SIZE;
-    obj.surfaceCtx = obj.surface.getContext("2d");
-    obj.surfaceCtx.imageSmoothingEnabled = true;
-    obj.surfaceCtx.imageSmoothingQuality = "high";
-  }
-
-  const ctx2 = obj.surfaceCtx;
-
-  ctx2.clearRect(0, 0, SURFACE_SIZE, SURFACE_SIZE);
-
-  ctx2.save();
-  ctx2.translate(SURFACE_SIZE / 2, SURFACE_SIZE / 2);
-
-  drawObjectOnContext(obj, ctx2);
-
-  ctx2.restore();
-
-  obj.modified = false;
+    ctx2.restore();
+    obj.modified = false; // mark as up-to-date
 }
 
 // =======================
@@ -1066,17 +1066,28 @@ function drawObjectLayer(extraObjects = []) {
         allObjects.push(...getExposedObjectFrame(currentFrame, l));
     }
     allObjects.push(...extraObjects);
+
+    const cw = canvas.width, ch = canvas.height;
+
     allObjects.forEach(obj => {
         if (!obj.surface) initObjectSurface(obj);
+
         const t = obj.transform ?? { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 };
+        const w = obj.surface.width * (t.scaleX ?? 1);
+        const h = obj.surface.height * (t.scaleY ?? 1);
+        const x = t.x - w/2, y = t.y - h/2;
+
+        if (x + w < 0 || x > cw || y + h < 0 || y > ch) return; // 🔹 Skip offscreen
+
         ctx.save();
-        ctx.translate(t.x ?? 0, t.y ?? 0);
+        ctx.translate(t.x, t.y);
         ctx.rotate(t.rotation ?? 0);
         ctx.globalAlpha = obj.style?.opacity ?? obj.opacity ?? 1;
         ctx.scale(t.scaleX ?? 1, t.scaleY ?? 1);
         ctx.drawImage(obj.surface, -obj.surface.width / 2, -obj.surface.height / 2);
         ctx.restore();
     });
+
     if (currentTool === "transform" && selectedObject) drawSelectionBox(selectedObject);
 }
 
