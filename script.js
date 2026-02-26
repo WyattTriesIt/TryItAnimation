@@ -492,6 +492,15 @@ function refreshCanvas() {
   }
 }
 
+let pendingRefresh = false;
+function requestRefresh() {
+    if (pendingRefresh) return;
+    pendingRefresh = true;
+    requestAnimationFrame(() => {
+        refreshCanvas();
+        pendingRefresh = false;
+    });
+}
 // =======================
 // Save Frame
 // =======================
@@ -662,16 +671,7 @@ currentMousePos = getCanvasPos(e);
     t.scaleX = (newWidth / baseWidth) * startScaleX;
     t.scaleY = (newHeight / baseHeight) * startScaleY;
   }
-    let pendingRefresh = false;
-
-function requestRefresh() {
-    if (pendingRefresh) return;
-    pendingRefresh = true;
-    requestAnimationFrame(() => {
-        refreshCanvas();
-        pendingRefresh = false;
-    });
-}
+requestRefresh()
 
 // replace all `refreshCanvas()` calls inside mousemove with `requestRefresh()`
     return;
@@ -1026,34 +1026,25 @@ function drawObjectOnContext(obj, ctx2) {
 }
 
 function initObjectSurface(obj) {
-    if (!obj.modified && obj.surface) return; // 🟢 Skip if unchanged
+    if (obj.surface && obj.surface.width === BASE_SIZE && obj.surface.height === BASE_SIZE) return;
 
     const BASE_SIZE = 2048;
-    const scaleX = Math.abs(obj.transform?.scaleX ?? 1);
-    const scaleY = Math.abs(obj.transform?.scaleY ?? 1);
-    const maxScale = Math.max(scaleX, scaleY);
-    const resolutionMultiplier = Math.max(1, maxScale);
-    const SURFACE_SIZE = Math.min(4096, Math.floor(BASE_SIZE * resolutionMultiplier));
-
-    if (!obj.surface || obj.surface.width !== SURFACE_SIZE || obj.surface.height !== SURFACE_SIZE) {
-        obj.surface = document.createElement("canvas");
-        obj.surface.width = SURFACE_SIZE;
-        obj.surface.height = SURFACE_SIZE;
-        obj.surfaceCtx = obj.surface.getContext("2d");
-        obj.surfaceCtx.imageSmoothingEnabled = true;
-        obj.surfaceCtx.imageSmoothingQuality = "high";
-    }
+    obj.surface = document.createElement("canvas");
+    obj.surface.width = BASE_SIZE;
+    obj.surface.height = BASE_SIZE;
+    obj.surfaceCtx = obj.surface.getContext("2d");
+    obj.surfaceCtx.imageSmoothingEnabled = true;
+    obj.surfaceCtx.imageSmoothingQuality = "high";
 
     const ctx2 = obj.surfaceCtx;
-    ctx2.clearRect(0, 0, SURFACE_SIZE, SURFACE_SIZE);
+    ctx2.clearRect(0, 0, BASE_SIZE, BASE_SIZE);
 
     ctx2.save();
-    ctx2.translate(SURFACE_SIZE / 2, SURFACE_SIZE / 2);
-
+    ctx2.translate(BASE_SIZE / 2, BASE_SIZE / 2);
     drawObjectOnContext(obj, ctx2);
-
     ctx2.restore();
-    obj.modified = false; // mark as up-to-date
+
+    obj.modified = false;
 }
 
 // =======================
