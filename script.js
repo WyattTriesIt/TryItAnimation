@@ -134,7 +134,7 @@ function toggleToolProperties() {
 }
 function getObjectAtPosition(x, y) {
     for (let l = layers.length - 1; l >= 0; l--) {
-        const objects = getExposedObjectFrame(currentFrame, l);
+        const objects = objectFrames[currentFrame][l];
         for (let i = objects.length - 1; i >= 0; i--) {
             const obj = objects[i];
             if (!obj) continue;
@@ -258,8 +258,9 @@ timelineLengthInput.onchange = () => {
 // Frame Interaction
 // =======================
 function frameMouseDown(e) {
-  currentFrame = +e.target.dataset.index;
-  activeLayer = +e.target.dataset.layer;
+  currentFrame = +e.currentTarget.dataset.index;
+  activeLayer = +e.currentTarget.dataset.layer;
+
   renderLayers();
   renderTimeline();
   refreshCanvas();
@@ -302,28 +303,43 @@ function makeKeyframeAt(frame, layer, sourceImg = null) {
 }
 
 function overwriteFrameBlank() {
-    objectFrames[currentFrame][activeLayer] = [];
+
+    // Make this frame a real keyframe
     realFrames[currentFrame][activeLayer] = true;
-    propagateObjectsFrom(currentFrame, activeLayer);
+
+    // Clear objects on this frame
+    objectFrames[currentFrame][activeLayer] = [];
+
+    // Propagate blank forward until next real keyframe
+    for (let i = currentFrame + 1; i < objectFrames.length; i++) {
+        if (realFrames[i][activeLayer]) break;
+        objectFrames[i][activeLayer] = [];
+    }
 }
 
 function overwriteFrameDuplicate() {
     const srcFrame = findPreviousReal(currentFrame, activeLayer);
     if (srcFrame < 0) return;
-    objectFrames[currentFrame][activeLayer] = JSON.parse(
-        JSON.stringify(objectFrames[srcFrame][activeLayer])
-    );
+
+    const srcObjects = objectFrames[srcFrame][activeLayer];
+
+    const cloned = srcObjects.map(obj => cloneObjectWithSurface(obj));
+
+    objectFrames[currentFrame][activeLayer] = cloned;
     realFrames[currentFrame][activeLayer] = true;
-    rebuildSurfacesInFrame(currentFrame, activeLayer);
+
     propagateObjectsFrom(currentFrame, activeLayer);
 }
 
 function propagateObjectsFrom(startFrame, layer) {
     const src = objectFrames[startFrame][layer];
+
     for (let i = startFrame + 1; i < objectFrames.length; i++) {
         if (realFrames[i][layer]) break;
-        objectFrames[i][layer] = JSON.parse(JSON.stringify(src));
-        rebuildSurfacesInFrame(i, layer);
+
+        const cloned = src.map(obj => cloneObjectWithSurface(obj));
+
+        objectFrames[i][layer] = cloned;
     }
 }
 
@@ -336,10 +352,10 @@ function deleteFrame() {
   if (prev >= 0) {
     for (let i = currentFrame; i < objectFrames.length; i++) {
       if (realFrames[i][activeLayer]) break;
-      objectFrames[i][activeLayer] = JSON.parse(
-  JSON.stringify(objectFrames[prev][activeLayer])
-);
-rebuildSurfacesInFrame(i, activeLayer);
+      objectFrames[i][activeLayer] =
+    objectFrames[prev][activeLayer].map(obj =>
+        cloneObjectWithSurface(obj)
+    );
     }
   }
 }
@@ -369,6 +385,40 @@ function getExposedObjectFrame(frame, layer) {
     }
   }
   return [];
+}
+
+function cloneObjectWithSurface(obj) {
+    const cloned = JSON.parse(JSON.stringify(obj));
+
+    if (obj.surface) {
+        cloned.surface = document.createElement("canvas");
+        cloned.surface.width = obj.surface.width;
+        cloned.surface.height = obj.surface.height;
+
+        const ctx2 = cloned.surface.getContext("2d");
+        ctx2.drawImage(obj.surface, 0, 0);
+
+        cloned.surfaceCtx = ctx2;
+    }
+
+    return cloned;
+}
+
+function ensureFramePopulated(frame, layer) {
+    if (realFrames[frame][layer]) return;
+
+    const prev = findPreviousReal(frame, layer);
+    if (prev < 0) return;
+
+    const cloned = JSON.parse(
+        JSON.stringify(objectFrames[prev][layer])
+    );
+
+    cloned.forEach(obj => {
+        initObjectSurface(obj);
+    });
+
+    objectFrames[frame][layer] = cloned;
 }
 
 function getObjectBoundingBox(obj) {
@@ -419,7 +469,7 @@ function drawOnionObjects(frameIndex, baseAlpha, tint = null) {
     for (let l = 0; l < layers.length; l++) {
         const objs = getExposedObjectFrame(frameIndex, l);
         objs.forEach(obj => {
-            if (!obj.surface) initObjectSurface(obj);
+            if (!obj.surface) return;
             const t = obj.transform ?? { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 };
 
             ctx.save();
@@ -464,6 +514,7 @@ function drawCurrentFrameOnly() {
 // Refresh Canvas
 // =======================
 function refreshCanvas() {
+
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   // Draw current frame only
