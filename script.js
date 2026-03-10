@@ -1,4 +1,5 @@
 const canvas = document.getElementById("canvas");
+canvas.style.touchAction = "none";
 const ctx = canvas.getContext("2d");
 const timeline = document.getElementById("timeline");
 const frameMenu = document.getElementById("frameMenu");
@@ -941,9 +942,15 @@ canvas.addEventListener("pointerup", e => {
   transformDragging = false;
 });
 
-canvas.addEventListener("pointercancel", () => {
+canvas.addEventListener("pointercancel", e => {
+
+  if (drawing || transformDragging) {
+    handlePointerUp(e);
+  }
+
   drawing = false;
   transformDragging = false;
+
 });
 
 // =======================
