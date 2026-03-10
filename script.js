@@ -578,7 +578,7 @@ function saveFrame() {
 // =======================
 let brushPoints = [];
 
-canvas.onmousedown = e => {
+function handlePointerDown(e) {
 startPos = getCanvasPos(e);
   currentMousePos = { ...startPos };
   drawing = true;
@@ -677,7 +677,7 @@ if (currentTool === "eraser") {
   }
 };
 
-canvas.onmousemove = e => {
+function handlePointerMove(e) {
 currentMousePos = getCanvasPos(e);
 
   // --- Transform Dragging ---
@@ -811,7 +811,7 @@ if (currentTool === "eraser") {
  }
 };
 
-canvas.onmouseup = () => {
+function handlePointerUp(e) {
 
 if (currentTool === "transform" && transformDragging) {
 
@@ -909,23 +909,43 @@ if (currentTool === "eraser") {
 };
 
 canvas.addEventListener("pointerdown", e => {
+  e.preventDefault();
   canvas.setPointerCapture(e.pointerId);
-  canvas.onmousedown(e);
+
+  const pos = getCanvasPos(e);
+  startPos = pos;
+  currentMousePos = { ...pos };
+
+  drawing = true;
+
+  handlePointerDown(e);   // call your existing mousedown logic
 });
 
 canvas.addEventListener("pointermove", e => {
-  canvas.onmousemove(e);
+  if (!drawing && !transformDragging) return;
+
+  e.preventDefault();
+
+  currentMousePos = getCanvasPos(e);
+  handlePointerMove(e);   // call your existing mousemove logic
 });
 
 canvas.addEventListener("pointerup", e => {
+  e.preventDefault();
+
   canvas.releasePointerCapture(e.pointerId);
-  canvas.onmouseup(e);
+
+  handlePointerUp(e);     // call your existing mouseup logic
+
+  drawing = false;
+  transformDragging = false;
 });
 
 canvas.addEventListener("pointercancel", () => {
   drawing = false;
   transformDragging = false;
 });
+
 // =======================
 // Pixel Helpers
 // =======================
