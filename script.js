@@ -528,8 +528,10 @@ function refreshCanvas() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   // Draw all objects for current frame
-  drawObjectLayer(previewObject ? [previewObject] : []);
-
+  drawObjectLayer();
+if (previewObject) {
+  drawPreviewObject(previewObject);
+}
   // Draw onion skins
   if (onionEnabled) {
 
@@ -580,7 +582,8 @@ startPos = getCanvasPos(e);
   drawing = true;
 
 if (!realFrames[currentFrame][activeLayer]) {
-  realFrames[currentFrame][activeLayer] = true;
+    realFrames[currentFrame][activeLayer] = true;
+    ensureFramePopulated(currentFrame, activeLayer); // 🔹 ensure object surface exists
 }
 
   ctx.lineCap = "round";
@@ -731,6 +734,18 @@ currentMousePos = getCanvasPos(e);
     t.scaleX = (newWidth / baseWidth) * startScaleX;
     t.scaleY = (newHeight / baseHeight) * startScaleY;
   }
+
+  // --- Shape Preview ---
+if (currentTool === "shape") {
+    previewObject = {
+        type: shapeType,
+        start: { x: startPos.x, y: startPos.y },
+        end: { x: currentMousePos.x, y: currentMousePos.y },
+        transform: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 },
+        style: { color: shapeColor, thickness: shapeThickness, opacity: 1 }
+    };
+    requestRefresh();
+}
 requestRefresh()
 
 // replace all `refreshCanvas()` calls inside mousemove with `requestRefresh()`
@@ -740,48 +755,36 @@ requestRefresh()
   if (!drawing) return;
 
   // --- Brush Preview ---
-  if (currentTool === "brush") {
+if (currentTool === "brush") {
     brushPoints.push({ ...currentMousePos });
 
-    // --- smooth for preview ---
-    const smoothPoints = [];
-    for (let i = 0; i < brushPoints.length - 1; i++) {
-      const p0 = brushPoints[i === 0 ? i : i - 1];
-      const p1 = brushPoints[i];
-      const p2 = brushPoints[i + 1];
-      const p3 = brushPoints[i + 2 < brushPoints.length ? i + 2 : i + 1];
-      const segments = 3; // fewer for preview
-      for (let t = 0; t <= 1; t += 1 / segments) {
-        const tt = t*t;
-        const ttt = tt*t;
-        const x = 0.5*((2*p1.x)+(-p0.x+p2.x)*t+(2*p0.x-5*p1.x+4*p2.x-p3.x)*tt+(-p0.x+3*p1.x-3*p2.x+p3.x)*ttt);
-        const y = 0.5*((2*p1.y)+(-p0.y+p2.y)*t+(2*p0.y-5*p1.y+4*p2.y-p3.y)*tt+(-p0.y+3*p1.y-3*p2.y+p3.y)*ttt);
-        smoothPoints.push({ x, y });
-      }
+    // Don't recreate previewObject each move
+    if (!previewObject) {
+        previewObject = {
+            type: "brush",
+            points: brushPoints,
+            transform: { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 },
+            style: { color: brushColor, width: brushSize, opacity: 1 }
+        };
     }
 
-    previewObject = {
-      type: "brush",
-      points: smoothPoints,
-      style: { color: brushColor, width: brushSize, opacity: 1 }
-    };
-requestRefresh();
+    // Draw live directly on the main canvas
+    ctx.save();
+    ctx.strokeStyle = brushColor;
+    ctx.lineWidth = brushSize;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    // Draw the last segment only for performance
+    const len = brushPoints.length;
+    if (len >= 2) {
+        ctx.beginPath();
+        ctx.moveTo(brushPoints[len - 2].x, brushPoints[len - 2].y);
+        ctx.lineTo(brushPoints[len - 1].x, brushPoints[len - 1].y);
+        ctx.stroke();
+    }
+    ctx.restore();
 }
-
-  // --- Shape Preview ---
-  if (currentTool === "shape") {
-    const previewObject = {
-      type: shapeType,
-      start: { ...startPos },
-      end: { ...currentMousePos },
-      style: { color: shapeColor, thickness: shapeThickness, opacity: 1 }
-    };
-requestRefresh();
-
-ctx.save();
-drawObjectLayer([previewObject]);
-ctx.restore();
-  }
 
   // --- Eraser Preview & Action ---
 if (currentTool === "eraser") {
@@ -901,7 +904,8 @@ if (currentTool === "eraser") {
         }
     }
 }
-  previewObject = null;
+  previewObject = null; 
+  requestRefresh(); // 🔹 ensures canvas redraw after finishing
   refreshCanvas();
   saveFrame();
 };
@@ -1117,22 +1121,20 @@ function drawObjectOnContext(obj, ctx2) {
 }
 
 function initObjectSurface(obj) {
-    if (obj.surface) return;
+    if (!obj.surface) {
+        obj.surface = document.createElement("canvas");
+        obj.surface.width = OBJECT_SURFACE_SIZE;
+        obj.surface.height = OBJECT_SURFACE_SIZE;
+        obj.surfaceCtx = obj.surface.getContext("2d");
+        obj.surfaceCtx.imageSmoothingEnabled = true;
+        obj.surfaceCtx.imageSmoothingQuality = "high";
+    }
 
-    obj.surface = document.createElement("canvas");
-    obj.surface.width = OBJECT_SURFACE_SIZE;
-    obj.surface.height = OBJECT_SURFACE_SIZE;
-    obj.surfaceCtx = obj.surface.getContext("2d");
-
-    obj.surfaceCtx.imageSmoothingEnabled = true;
-    obj.surfaceCtx.imageSmoothingQuality = "high";
-
+    // redraw object to surface
     const ctx2 = obj.surfaceCtx;
-
     ctx2.clearRect(0, 0, OBJECT_SURFACE_SIZE, OBJECT_SURFACE_SIZE);
-
     ctx2.save();
-    ctx2.translate(OBJECT_SURFACE_SIZE / 2, OBJECT_SURFACE_SIZE / 2);
+    ctx2.translate(OBJECT_SURFACE_SIZE/2, OBJECT_SURFACE_SIZE/2);
     drawObjectOnContext(obj, ctx2);
     ctx2.restore();
 }
@@ -1227,6 +1229,60 @@ ctx2.restore();
     }
     realFrames[currentFrame][activeLayer] = true;
     requestRefresh();
+}
+
+function drawPreviewObject(obj) {
+    ctx.save();
+    ctx.globalAlpha = obj.style?.opacity ?? 1;
+
+// inside handlePointerMove -> currentTool === "brush"
+if (currentTool === "brush") {
+    brushPoints.push({ ...currentMousePos });
+
+    previewObject = {
+      type: "brush",
+      points: brushPoints,
+      width: 0, height: 0,
+      transform: { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 },
+      style: { color: brushColor, width: brushSize, opacity: 1 }
+    };
+
+    // redraw live surface so it shows immediately
+    if (!previewObject.surface) initObjectSurface(previewObject);
+    const ctx2 = previewObject.surfaceCtx;
+    ctx2.clearRect(0, 0, previewObject.surface.width, previewObject.surface.height);
+    ctx2.save();
+    ctx2.translate(previewObject.surface.width/2, previewObject.surface.height/2);
+    drawObjectOnContext(previewObject, ctx2);
+    ctx2.restore();
+
+    requestRefresh();
+}
+
+    const t = obj.transform ?? { x: 0, y: 0 };
+ctx.beginPath();
+
+if (obj.type === "line") {
+    ctx.moveTo(obj.start.x + t.x, obj.start.y + t.y);
+    ctx.lineTo(obj.end.x + t.x, obj.end.y + t.y);
+    ctx.stroke();
+} else if (obj.type === "rect") {
+    ctx.strokeRect(
+        obj.start.x + t.x,
+        obj.start.y + t.y,
+        obj.end.x - obj.start.x,
+        obj.end.y - obj.start.y
+    );
+} else if (obj.type === "circle") {
+    const cx = (obj.start.x + obj.end.x)/2 + t.x;
+    const cy = (obj.start.y + obj.end.y)/2 + t.y;
+    const rx = Math.abs(obj.end.x - obj.start.x)/2;
+    const ry = Math.abs(obj.end.y - obj.start.y)/2;
+    ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI*2);
+    ctx.stroke();
+}
+
+    ctx.restore();
 }
 
 function getSurfaceBoundingBox(obj) {
@@ -1382,5 +1438,8 @@ window.addEventListener("resize", () => {
 
     canvas.style.transform = `scale(${scale})`;
     canvas.style.transformOrigin = "top left";
+    canvas.addEventListener("pointerdown", handlePointerDown);
+    canvas.addEventListener("pointermove", handlePointerMove);
+    canvas.addEventListener("pointerup", handlePointerUp);
 });
 
