@@ -10,7 +10,7 @@ const projHInput = document.getElementById("projH");
 const projFPSInput = document.getElementById("projFPS");
 const timelineLengthInput = document.getElementById("timelineLength");
 const app = document.getElementById("app");
-
+const OBJECT_SURFACE_SIZE = 512;
 // =======================
 // Tools
 // =======================
@@ -1126,25 +1126,24 @@ function drawObjectOnContext(obj, ctx2) {
 }
 
 function initObjectSurface(obj) {
-    if (obj.surface && obj.surface.width === BASE_SIZE && obj.surface.height === BASE_SIZE) return;
+    if (obj.surface) return;
 
-    const BASE_SIZE = 2048;
     obj.surface = document.createElement("canvas");
-    obj.surface.width = BASE_SIZE;
-    obj.surface.height = BASE_SIZE;
+    obj.surface.width = OBJECT_SURFACE_SIZE;
+    obj.surface.height = OBJECT_SURFACE_SIZE;
     obj.surfaceCtx = obj.surface.getContext("2d");
+
     obj.surfaceCtx.imageSmoothingEnabled = true;
     obj.surfaceCtx.imageSmoothingQuality = "high";
 
     const ctx2 = obj.surfaceCtx;
-    ctx2.clearRect(0, 0, BASE_SIZE, BASE_SIZE);
+
+    ctx2.clearRect(0, 0, OBJECT_SURFACE_SIZE, OBJECT_SURFACE_SIZE);
 
     ctx2.save();
-    ctx2.translate(BASE_SIZE / 2, BASE_SIZE / 2);
+    ctx2.translate(OBJECT_SURFACE_SIZE / 2, OBJECT_SURFACE_SIZE / 2);
     drawObjectOnContext(obj, ctx2);
     ctx2.restore();
-
-    obj.modified = false;
 }
 
 // =======================
