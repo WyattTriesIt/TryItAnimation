@@ -589,6 +589,23 @@ if (!realFrames[currentFrame][activeLayer]) {
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
 
+// --- Fill Tool ---
+if (currentTool === "fill") {
+
+    const fillObj = floodFillObject(startPos, fillColor);
+
+if (fillObj) {
+    // Do NOT call initObjectSurface for fill objects
+    objectFrames[currentFrame][activeLayer].push(fillObj);
+
+    saveFrame();
+    requestRefresh();
+}
+
+    drawing = false;
+    return;
+}
+
   // --- Transform Tool ---
   if (currentTool === "transform") {
 
@@ -735,7 +752,15 @@ currentMousePos = getCanvasPos(e);
     t.scaleY = (newHeight / baseHeight) * startScaleY;
   }
 
-  // --- Shape Preview ---
+requestRefresh()
+
+// replace all `refreshCanvas()` calls inside mousemove with `requestRefresh()`
+    return;
+}
+
+  if (!drawing) return;
+
+// --- Shape Preview ---
 if (currentTool === "shape") {
     previewObject = {
         type: shapeType,
@@ -744,15 +769,9 @@ if (currentTool === "shape") {
         transform: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 },
         style: { color: shapeColor, thickness: shapeThickness, opacity: 1 }
     };
+
     requestRefresh();
 }
-requestRefresh()
-
-// replace all `refreshCanvas()` calls inside mousemove with `requestRefresh()`
-    return;
-}
-
-  if (!drawing) return;
 
   // --- Brush Preview ---
 if (currentTool === "brush") {
@@ -966,33 +985,98 @@ function hexToRgba(hex){ hex=hex.replace("#",""); return {r:parseInt(hex.slice(0
 // Flood Fill — Object-Based
 // =======================
 function floodFillObject(start, color) {
-  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const stack = [{ x: Math.floor(start.x), y: Math.floor(start.y) }];
-  const targetColor = getPixel(imgData, stack[0].x, stack[0].y);
-  const fillColor = hexToRgba(color);
-  if (pixelMatch(targetColor, fillColor)) return null;
 
-  let minX = canvas.width, minY = canvas.height, maxX = 0, maxY = 0;
+  const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const data = img.data;
+
+  const startX = Math.floor(start.x);
+  const startY = Math.floor(start.y);
+
+  const target = getPixel(img, startX, startY);
+  const fill = hexToRgba(color);
+
+  if (pixelMatch(target, fill)) return null;
+
   const visited = new Uint8Array(canvas.width * canvas.height);
+  const stack = [{ x: startX, y: startY }];
+
+  let minX = canvas.width, minY = canvas.height;
+  let maxX = 0, maxY = 0;
+
+  const pixels = [];
 
   while (stack.length) {
+
     const { x, y } = stack.pop();
+
     if (x < 0 || y < 0 || x >= canvas.width || y >= canvas.height) continue;
-    const index = y * canvas.width + x;
-    if (visited[index]) continue;
 
-    const pixel = getPixel(imgData, x, y);
-    if (!pixelMatch(pixel, targetColor)) continue;
+    const idx = y * canvas.width + x;
+    if (visited[idx]) continue;
 
-    visited[index] = 1;
-    minX = Math.min(minX, x); minY = Math.min(minY, y);
-    maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
+    const pixel = getPixel(img, x, y);
+    if (!pixelMatch(pixel, target)) continue;
 
-    stack.push({ x: x+1, y }); stack.push({ x: x-1, y });
-    stack.push({ x, y: y+1 }); stack.push({ x, y: y-1 });
+    visited[idx] = 1;
+
+    pixels.push({ x, y });
+
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+
+    stack.push({ x: x + 1, y });
+    stack.push({ x: x - 1, y });
+    stack.push({ x, y: y + 1 });
+    stack.push({ x, y: y - 1 });
   }
 
-  return { type: "fill", position: { x: minX, y: minY }, width: maxX-minX+1, height: maxY-minY+1, color, opacity: 1 };
+  if (!pixels.length) return null;
+
+  const width = maxX - minX + 1;
+  const height = maxY - minY + 1;
+
+  const surface = document.createElement("canvas");
+  surface.width = width;
+  surface.height = height;
+
+  const sctx = surface.getContext("2d");
+  const imgData = sctx.createImageData(width, height);
+
+  const fillColor = hexToRgba(color);
+
+  pixels.forEach(p => {
+
+    const x = p.x - minX;
+    const y = p.y - minY;
+
+    const i = (y * width + x) * 4;
+
+    imgData.data[i] = fillColor.r;
+    imgData.data[i + 1] = fillColor.g;
+    imgData.data[i + 2] = fillColor.b;
+    imgData.data[i + 3] = 255;
+
+  });
+
+  sctx.putImageData(imgData, 0, 0);
+
+  return {
+    type: "fill",
+    surface,
+    surfaceCtx: sctx,
+    width,
+    height,
+    transform: {
+      x: minX + width / 2,
+      y: minY + height / 2,
+      rotation: 0,
+      scaleX: 1,
+      scaleY: 1
+    },
+    style: { opacity: 1 }
+  };
 }
 
 // =======================
@@ -1111,10 +1195,9 @@ function drawObjectOnContext(obj, ctx2) {
       ctx2.stroke();
       break;
 
-    case "fill":
-      ctx2.fillStyle = obj.color;
-      ctx2.fillRect(obj.position.x, obj.position.y, obj.width, obj.height);
-      break;
+case "fill":
+  ctx2.drawImage(obj.surface, -obj.width / 2, -obj.height / 2);
+  break;
   }
 
   ctx2.restore();
@@ -1232,55 +1315,43 @@ ctx2.restore();
 }
 
 function drawPreviewObject(obj) {
+    if (!obj) return;
+
     ctx.save();
+
     ctx.globalAlpha = obj.style?.opacity ?? 1;
-
-// inside handlePointerMove -> currentTool === "brush"
-if (currentTool === "brush") {
-    brushPoints.push({ ...currentMousePos });
-
-    previewObject = {
-      type: "brush",
-      points: brushPoints,
-      width: 0, height: 0,
-      transform: { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 },
-      style: { color: brushColor, width: brushSize, opacity: 1 }
-    };
-
-    // redraw live surface so it shows immediately
-    if (!previewObject.surface) initObjectSurface(previewObject);
-    const ctx2 = previewObject.surfaceCtx;
-    ctx2.clearRect(0, 0, previewObject.surface.width, previewObject.surface.height);
-    ctx2.save();
-    ctx2.translate(previewObject.surface.width/2, previewObject.surface.height/2);
-    drawObjectOnContext(previewObject, ctx2);
-    ctx2.restore();
-
-    requestRefresh();
-}
+    ctx.strokeStyle = obj.style?.color ?? "#000";
+    ctx.lineWidth = obj.style?.thickness ?? obj.style?.width ?? 1;
 
     const t = obj.transform ?? { x: 0, y: 0 };
-ctx.beginPath();
 
-if (obj.type === "line") {
-    ctx.moveTo(obj.start.x + t.x, obj.start.y + t.y);
-    ctx.lineTo(obj.end.x + t.x, obj.end.y + t.y);
-    ctx.stroke();
-} else if (obj.type === "rect") {
-    ctx.strokeRect(
-        obj.start.x + t.x,
-        obj.start.y + t.y,
-        obj.end.x - obj.start.x,
-        obj.end.y - obj.start.y
-    );
-} else if (obj.type === "circle") {
-    const cx = (obj.start.x + obj.end.x)/2 + t.x;
-    const cy = (obj.start.y + obj.end.y)/2 + t.y;
-    const rx = Math.abs(obj.end.x - obj.start.x)/2;
-    const ry = Math.abs(obj.end.y - obj.start.y)/2;
-    ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI*2);
-    ctx.stroke();
-}
+    ctx.beginPath();
+
+    if (obj.type === "line") {
+        ctx.moveTo(obj.start.x + t.x, obj.start.y + t.y);
+        ctx.lineTo(obj.end.x + t.x, obj.end.y + t.y);
+        ctx.stroke();
+    }
+
+    else if (obj.type === "rect") {
+        ctx.strokeRect(
+            obj.start.x + t.x,
+            obj.start.y + t.y,
+            obj.end.x - obj.start.x,
+            obj.end.y - obj.start.y
+        );
+    }
+
+    else if (obj.type === "circle") {
+        const cx = (obj.start.x + obj.end.x) / 2 + t.x;
+        const cy = (obj.start.y + obj.end.y) / 2 + t.y;
+        const rx = Math.abs(obj.end.x - obj.start.x) / 2;
+        const ry = Math.abs(obj.end.y - obj.start.y) / 2;
+
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+        ctx.stroke();
+    }
 
     ctx.restore();
 }
