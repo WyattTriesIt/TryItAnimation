@@ -986,8 +986,9 @@ function hexToRgba(hex){ hex=hex.replace("#",""); return {r:parseInt(hex.slice(0
 // =======================
 function floodFillObject(start, color) {
 
+  refreshCanvas();
+
   const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const data = img.data;
 
   const startX = Math.floor(start.x);
   const startY = Math.floor(start.y);
@@ -1003,7 +1004,18 @@ function floodFillObject(start, color) {
   let minX = canvas.width, minY = canvas.height;
   let maxX = 0, maxY = 0;
 
-  const pixels = [];
+  const TOLERANCE = 6;
+
+  function pixelClose(a, b) {
+    return (
+      Math.abs(a.r - b.r) <= TOLERANCE &&
+      Math.abs(a.g - b.g) <= TOLERANCE &&
+      Math.abs(a.b - b.b) <= TOLERANCE &&
+      Math.abs(a.a - b.a) <= TOLERANCE
+    );
+  }
+
+  const mask = new Uint8Array(canvas.width * canvas.height);
 
   while (stack.length) {
 
@@ -1015,11 +1027,10 @@ function floodFillObject(start, color) {
     if (visited[idx]) continue;
 
     const pixel = getPixel(img, x, y);
-    if (!pixelMatch(pixel, target)) continue;
+    if (!pixelClose(pixel, target)) continue;
 
     visited[idx] = 1;
-
-    pixels.push({ x, y });
+    mask[idx] = 1;
 
     if (x < minX) minX = x;
     if (y < minY) minY = y;
@@ -1032,8 +1043,45 @@ function floodFillObject(start, color) {
     stack.push({ x, y: y - 1 });
   }
 
-  if (!pixels.length) return null;
+  if (maxX < minX || maxY < minY) return null;
 
+const expanded = new Uint8Array(mask);
+
+for (let y = minY; y <= maxY; y++) {
+  for (let x = minX; x <= maxX; x++) {
+
+    const idx = y * canvas.width + x;
+    if (!mask[idx]) continue;
+
+    for (let oy = -1; oy <= 1; oy++) {
+      for (let ox = -1; ox <= 1; ox++) {
+
+        const nx = x + ox;
+        const ny = y + oy;
+
+        if (
+          nx < 0 || ny < 0 ||
+          nx >= canvas.width || ny >= canvas.height
+        ) continue;
+
+        const nIdx = ny * canvas.width + nx;
+
+        if (mask[nIdx]) continue;
+
+        const pixel = getPixel(img, nx, ny);
+
+        // Only expand into semi-transparent pixels (anti-alias edge)
+        if (pixel.a > 0 && pixel.a < 200) {
+          expanded[nIdx] = 1;
+        }
+      }
+    }
+  }
+}
+
+mask.set(expanded);
+
+mask.set(expanded);
   const width = maxX - minX + 1;
   const height = maxY - minY + 1;
 
@@ -1043,22 +1091,25 @@ function floodFillObject(start, color) {
 
   const sctx = surface.getContext("2d");
   const imgData = sctx.createImageData(width, height);
+  const data = imgData.data;
 
-  const fillColor = hexToRgba(color);
+  for (let y = minY; y <= maxY; y++) {
+    for (let x = minX; x <= maxX; x++) {
 
-  pixels.forEach(p => {
+      const idx = y * canvas.width + x;
+      if (!mask[idx]) continue;
 
-    const x = p.x - minX;
-    const y = p.y - minY;
+      const lx = x - minX;
+      const ly = y - minY;
 
-    const i = (y * width + x) * 4;
+      const i = (ly * width + lx) * 4;
 
-    imgData.data[i] = fillColor.r;
-    imgData.data[i + 1] = fillColor.g;
-    imgData.data[i + 2] = fillColor.b;
-    imgData.data[i + 3] = 255;
-
-  });
+      data[i] = fill.r;
+      data[i + 1] = fill.g;
+      data[i + 2] = fill.b;
+      data[i + 3] = 255;
+    }
+  }
 
   sctx.putImageData(imgData, 0, 0);
 
@@ -1509,8 +1560,5 @@ window.addEventListener("resize", () => {
 
     canvas.style.transform = `scale(${scale})`;
     canvas.style.transformOrigin = "top left";
-    canvas.addEventListener("pointerdown", handlePointerDown);
-    canvas.addEventListener("pointermove", handlePointerMove);
-    canvas.addEventListener("pointerup", handlePointerUp);
 });
 
