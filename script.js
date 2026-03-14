@@ -23,6 +23,9 @@ let shapeColor = "#000000";
 let shapeThickness = 3;
 let fillColor = "#ff0000";
 let selectedObject = null;
+let selectionBox = null;
+let multiSelection = [];
+let isSelecting = false;
 let transformDragging = false;
 let transformOffset = { x: 0, y: 0 };
 let rotationStartAngle = 0;
@@ -442,6 +445,88 @@ function getObjectBoundingBox(obj) {
 
     return null;
 }
+function getObjectsInSelectionBox(box) {
+
+  const selected = [];
+
+  const left = Math.min(box.x1, box.x2);
+  const right = Math.max(box.x1, box.x2);
+  const top = Math.min(box.y1, box.y2);
+  const bottom = Math.max(box.y1, box.y2);
+
+  for (let l = 0; l < layers.length; l++) {
+
+    const objs = getExposedObjectFrame(currentFrame, l);
+
+    objs.forEach(obj => {
+
+      const b = getObjectBoundingBox(obj);
+      if (!b) return;
+
+      const t = obj.transform ?? {x:0,y:0};
+
+      const cx = t.x + b.x;
+      const cy = t.y + b.y;
+
+      if (
+        cx >= left &&
+        cx <= right &&
+        cy >= top &&
+        cy <= bottom
+      ) {
+        selected.push(obj);
+      }
+
+    });
+
+  }
+
+  return selected;
+
+}
+
+function getMultiSelectionBounds() {
+
+  if (!multiSelection.length) return null;
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+
+  multiSelection.forEach(obj => {
+
+    const box = getObjectBoundingBox(obj);
+    if (!box) return;
+
+    const t = obj.transform ?? {x:0,y:0,scaleX:1,scaleY:1};
+
+    const width = box.width * (t.scaleX ?? 1);
+    const height = box.height * (t.scaleY ?? 1);
+
+    const cx = t.x + box.x * (t.scaleX ?? 1);
+    const cy = t.y + box.y * (t.scaleY ?? 1);
+
+    const left = cx - width/2;
+    const right = cx + width/2;
+    const top = cy - height/2;
+    const bottom = cy + height/2;
+
+    if (left < minX) minX = left;
+    if (right > maxX) maxX = right;
+    if (top < minY) minY = top;
+    if (bottom > maxY) maxY = bottom;
+
+  });
+
+  return {
+    x: (minX + maxX) / 2,
+    y: (minY + maxY) / 2,
+    width: maxX - minX,
+    height: maxY - minY
+  };
+
+}
 // =======================
 // Timeline Toolbar
 // =======================
@@ -529,6 +614,7 @@ function refreshCanvas() {
 
   // Draw all objects for current frame
   drawObjectLayer();
+  drawSelectionRectangle();
 if (previewObject) {
   drawPreviewObject(previewObject);
 }
@@ -668,12 +754,22 @@ if (handle.type === "rotate") {
     transformOffset.y = mouseY - selectedObject.transform.y;
 
     transformDragging = true;
-  } else {
-    selectedObject = null;
-    transformAction = null;
-    activeHandle = null;
-    refreshCanvas();
-  }
+} else {
+
+  // start box selection
+  isSelecting = true;
+
+  selectionBox = {
+    x1: mouseX,
+    y1: mouseY,
+    x2: mouseX,
+    y2: mouseY
+  };
+
+  multiSelection = [];
+  selectedObject = null;
+
+}
 }
 
   // --- Brush Tool ---
@@ -694,6 +790,14 @@ if (currentTool === "eraser") {
 };
 
 function handlePointerMove(e) {
+  // update selection box while dragging
+if (isSelecting && selectionBox) {
+  selectionBox.x2 = currentMousePos.x;
+  selectionBox.y2 = currentMousePos.y;
+
+  requestRefresh();
+  return;
+}
 currentMousePos = getCanvasPos(e);
 
   // --- Transform Dragging ---
@@ -702,10 +806,27 @@ currentMousePos = getCanvasPos(e);
     const mouseX = currentMousePos.x;
     const mouseY = currentMousePos.y;
 
-    if (transformAction === "move") {
-      t.x = mouseX - transformOffset.x;
-      t.y = mouseY - transformOffset.y;
-    } else if (transformAction === "rotate") {
+if (transformAction === "move") {
+
+  if (multiSelection.length > 1) {
+
+    const dx = mouseX - (selectedObject.transform.x + transformOffset.x);
+    const dy = mouseY - (selectedObject.transform.y + transformOffset.y);
+
+    multiSelection.forEach(obj => {
+      obj.transform.x += dx;
+      obj.transform.y += dy;
+    });
+
+  } else {
+
+    t.x = mouseX - transformOffset.x;
+    t.y = mouseY - transformOffset.y;
+
+  }
+
+}
+    else if (transformAction === "rotate") {
       const dx = mouseX - t.x;
       const dy = mouseY - t.y;
       const currentAngle = Math.atan2(dy, dx);
@@ -717,7 +838,6 @@ currentMousePos = getCanvasPos(e);
       t.rotation = newRotation;
     } else if (transformAction === "resize" && activeHandle != null && selectedObject) {
     const t = selectedObject.transform;
-
     // Use the _resizeStart values stored on mousedown
     const baseWidth = selectedObject._resizeStart.width;
     const baseHeight = selectedObject._resizeStart.height;
@@ -841,7 +961,21 @@ if (currentTool === "transform" && transformDragging) {
     saveFrame();
     return;
 }
+if (isSelecting) {
 
+  multiSelection = getObjectsInSelectionBox(selectionBox);
+
+  if (multiSelection.length === 1) {
+    selectedObject = multiSelection[0];
+  }
+
+  isSelecting = false;
+  selectionBox = null;
+
+  requestRefresh();
+  return;
+
+}
   if (!drawing) return;
 
   let obj = null;
@@ -1304,8 +1438,17 @@ function drawObjectLayer(extraObjects = []) {
         ctx.drawImage(obj.surface, -obj.surface.width / 2, -obj.surface.height / 2);
         ctx.restore();
     });
+    
+if (currentTool === "transform") {
 
-    if (currentTool === "transform" && selectedObject) drawSelectionBox(selectedObject);
+  if (multiSelection.length > 1) {
+    drawMultiSelectionBox();
+  } 
+  else if (selectedObject) {
+    drawSelectionBox(selectedObject);
+  }
+
+}
 }
 
 function pointToSegmentDistance(px, py, x1, y1, x2, y2) {
@@ -1441,6 +1584,26 @@ function getSurfaceBoundingBox(obj) {
 
 }
 
+function drawSelectionRectangle() {
+  if (!selectionBox) return;
+
+  const {x1, y1, x2, y2} = selectionBox;
+
+  ctx.save();
+  ctx.strokeStyle = "#00aaff";
+  ctx.setLineDash([6,4]);
+  ctx.lineWidth = 1;
+
+  ctx.strokeRect(
+    Math.min(x1,x2),
+    Math.min(y1,y2),
+    Math.abs(x2-x1),
+    Math.abs(y2-y1)
+  );
+
+  ctx.restore();
+}
+
 function drawSelectionBox(obj) {
   if (!obj || !obj.transform) return;
 
@@ -1501,6 +1664,41 @@ function drawSelectionBox(obj) {
   ctx.restore();
 }
 
+function drawMultiSelectionBox() {
+
+  const bounds = getMultiSelectionBounds();
+  if (!bounds) return;
+
+  const {x, y, width, height} = bounds;
+
+  ctx.save();
+
+  ctx.strokeStyle = "#00aaff";
+  ctx.lineWidth = 1;
+  ctx.setLineDash([6,4]);
+
+  ctx.strokeRect(
+    x - width/2,
+    y - height/2,
+    width,
+    height
+  );
+
+  const corners = [
+    [x - width/2, y - height/2],
+    [x + width/2, y - height/2],
+    [x + width/2, y + height/2],
+    [x - width/2, y + height/2]
+  ];
+
+  ctx.fillStyle = "#00aaff";
+  corners.forEach(([cx,cy])=>{
+    ctx.fillRect(cx-4, cy-4, 8, 8);
+  });
+
+  ctx.restore();
+
+}
 // =======================
 // Transform Interaction
 // =======================
