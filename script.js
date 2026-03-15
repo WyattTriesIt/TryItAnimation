@@ -28,6 +28,7 @@ let multiSelection = [];
 let isSelecting = false;
 let transformDragging = false;
 let transformOffset = { x: 0, y: 0 };
+let groupTransformStart = null;
 let rotationStartAngle = 0;
 let rotationStartObjectRotation = 0;
 let lastEraserPos = null;
@@ -703,26 +704,61 @@ if (fillObj) {
     const handle = getHandleUnderMouse(selectedObject, mouseX, mouseY);
     if (handle) {
       transformAction = handle.type;
-      if (handle.type === "resize") {
-    activeHandle = handle.corner;
+if (handle.type === "resize") {
 
-    // Store original size for smooth scaling
-    const box = getObjectBoundingBox(selectedObject);
-    selectedObject._resizeStart = {
-        width: box.width,
-        height: box.height,
-        scaleX: selectedObject.transform.scaleX,
-        scaleY: selectedObject.transform.scaleY
+  activeHandle = handle.corner;
+
+const bounds = getMultiSelectionBounds();
+
+groupTransformStart = {
+  bounds,
+  objects: multiSelection.map(obj => {
+    const t = obj.transform;
+
+    return {
+      obj,
+      startX: t.x,
+      startY: t.y,
+      offsetX: t.x - bounds.x,
+      offsetY: t.y - bounds.y,
+      rotation: t.rotation,
+      scaleX: t.scaleX,
+      scaleY: t.scaleY
     };
+  })
+};
+
 }
 
 if (handle.type === "rotate") {
-  const t = selectedObject.transform;
-  const dx = mouseX - t.x;
-  const dy = mouseY - t.y;
+
+  const bounds = getMultiSelectionBounds();
+
+  const dx = startPos.x - bounds.x;
+  const dy = startPos.y - bounds.y;
 
   rotationStartAngle = Math.atan2(dy, dx);
-  rotationStartObjectRotation = t.rotation;
+
+groupTransformStart = {
+  bounds,
+  objects: multiSelection.map(obj => {
+
+    const t = obj.transform ?? {x:0,y:0,rotation:0,scaleX:1,scaleY:1};
+    const box = getObjectBoundingBox(obj);
+
+    const cx = t.x + box.x * (t.scaleX ?? 1);
+    const cy = t.y + box.y * (t.scaleY ?? 1);
+
+    return {
+      obj,
+      offsetX: cx - bounds.x,
+      offsetY: cy - bounds.y,
+      rotation: t.rotation ?? 0
+    };
+
+  })
+};
+
 }
 
       transformDragging = true;
@@ -747,14 +783,20 @@ if (handle.type === "rotate") {
       };
     }
 
-    transformAction = "move";
-    activeHandle = null;
+transformAction = "move";
+activeHandle = null;
 
-    transformOffset.x = mouseX - selectedObject.transform.x;
-    transformOffset.y = mouseY - selectedObject.transform.y;
+multiSelection = multiSelection.length ? multiSelection : [selectedObject];
 
-    transformDragging = true;
-} else {
+multiSelection.forEach(o => {
+  o.startX = o.transform.x;
+  o.startY = o.transform.y;
+});
+
+transformDragging = true;
+} 
+
+else {
 
   // start box selection
   isSelecting = true;
@@ -790,7 +832,8 @@ if (currentTool === "eraser") {
 };
 
 function handlePointerMove(e) {
-  // update selection box while dragging
+
+  currentMousePos = getCanvasPos(e);
 if (isSelecting && selectionBox) {
   selectionBox.x2 = currentMousePos.x;
   selectionBox.y2 = currentMousePos.y;
@@ -798,7 +841,6 @@ if (isSelecting && selectionBox) {
   requestRefresh();
   return;
 }
-currentMousePos = getCanvasPos(e);
 
   // --- Transform Dragging ---
   if (currentTool === "transform" && transformDragging && selectedObject) {
@@ -808,69 +850,66 @@ currentMousePos = getCanvasPos(e);
 
 if (transformAction === "move") {
 
-  if (multiSelection.length > 1) {
+  const dx = mouseX - startPos.x;
+  const dy = mouseY - startPos.y;
 
-    const dx = mouseX - (selectedObject.transform.x + transformOffset.x);
-    const dy = mouseY - (selectedObject.transform.y + transformOffset.y);
-
-    multiSelection.forEach(obj => {
-      obj.transform.x += dx;
-      obj.transform.y += dy;
-    });
-
-  } else {
-
-    t.x = mouseX - transformOffset.x;
-    t.y = mouseY - transformOffset.y;
-
-  }
+  multiSelection.forEach(o => {
+    o.transform.x = o.startX + dx;
+    o.transform.y = o.startY + dy;
+  });
 
 }
-    else if (transformAction === "rotate") {
-      const dx = mouseX - t.x;
-      const dy = mouseY - t.y;
-      const currentAngle = Math.atan2(dy, dx);
-      let newRotation = rotationStartObjectRotation + (currentAngle - rotationStartAngle);
-      if (e.shiftKey) {
-        const snap = Math.PI / 12; // 15°
-        newRotation = Math.round(newRotation / snap) * snap;
-      }
-      t.rotation = newRotation;
-    } else if (transformAction === "resize" && activeHandle != null && selectedObject) {
-    const t = selectedObject.transform;
-    // Use the _resizeStart values stored on mousedown
-    const baseWidth = selectedObject._resizeStart.width;
-    const baseHeight = selectedObject._resizeStart.height;
-    const startScaleX = selectedObject._resizeStart.scaleX;
-    const startScaleY = selectedObject._resizeStart.scaleY;
 
-    // mouse delta relative to object center
-    let dx = currentMousePos.x - t.x;
-    let dy = currentMousePos.y - t.y;
+else if (transformAction === "rotate") {
+  const bounds = groupTransformStart.bounds;
+  const dx = currentMousePos.x - bounds.x;
+  const dy = currentMousePos.y - bounds.y;
+  const currentAngle = Math.atan2(dy, dx);
+  const delta = currentAngle - rotationStartAngle;
 
-    // convert to object-local coordinates (taking rotation into account)
-    const sin = Math.sin(-t.rotation);
-    const cos = Math.cos(-t.rotation);
-    let localX = dx * cos - dy * sin;
-    let localY = dx * sin + dy * cos;
+  groupTransformStart.objects.forEach(o => {
+    const obj = o.obj;
+    const cos = Math.cos(delta);
+    const sin = Math.sin(delta);
 
-    // corners of the original object (before scale)
-    const corners = [
-        [-baseWidth / 2, -baseHeight / 2],
-        [ baseWidth / 2, -baseHeight / 2],
-        [ baseWidth / 2,  baseHeight / 2],
-        [-baseWidth / 2,  baseHeight / 2]
-    ];
+const rx = o.offsetX * cos - o.offsetY * sin;
+const ry = o.offsetX * sin + o.offsetY * cos;
 
-    const opposite = corners[(activeHandle + 2) % 4];
+obj.transform.x = bounds.x + rx;
+obj.transform.y = bounds.y + ry;
 
-    const newWidth = Math.max(4, Math.abs(localX - opposite[0]));
-    const newHeight = Math.max(4, Math.abs(localY - opposite[1]));
+    obj.transform.rotation = o.rotation + delta;
+  });
 
-    // apply scale relative to starting scale
-    t.scaleX = (newWidth / baseWidth) * startScaleX;
-    t.scaleY = (newHeight / baseHeight) * startScaleY;
-  }
+  requestRefresh();
+}
+
+else if (transformAction === "resize") {
+
+  const bounds = groupTransformStart.bounds;
+
+  const dx = currentMousePos.x - bounds.x;
+  const dy = currentMousePos.y - bounds.y;
+
+  const startDX = startPos.x - bounds.x;
+  const startDY = startPos.y - bounds.y;
+
+  const scaleX = Math.max(0.05, dx / startDX);
+  const scaleY = Math.max(0.05, dy / startDY);
+
+  groupTransformStart.objects.forEach(o => {
+
+    const obj = o.obj;
+
+    obj.transform.x = bounds.x + o.offsetX * scaleX;
+    obj.transform.y = bounds.y + o.offsetY * scaleY;
+
+    obj.transform.scaleX = o.scaleX * scaleX;
+    obj.transform.scaleY = o.scaleY * scaleY;
+
+  });
+
+}
 
 requestRefresh()
 
@@ -963,11 +1002,13 @@ if (currentTool === "transform" && transformDragging) {
 }
 if (isSelecting) {
 
-  multiSelection = getObjectsInSelectionBox(selectionBox);
+multiSelection = getObjectsInSelectionBox(selectionBox);
 
-  if (multiSelection.length === 1) {
-    selectedObject = multiSelection[0];
-  }
+if (multiSelection.length > 0) {
+  selectedObject = multiSelection[0];
+} else {
+  selectedObject = null;
+}
 
   isSelecting = false;
   selectionBox = null;
@@ -1666,6 +1707,8 @@ function drawSelectionBox(obj) {
 
 function drawMultiSelectionBox() {
 
+  const ROTATE_DIST = 15;
+
   const bounds = getMultiSelectionBounds();
   if (!bounds) return;
 
@@ -1696,9 +1739,22 @@ function drawMultiSelectionBox() {
     ctx.fillRect(cx-4, cy-4, 8, 8);
   });
 
-  ctx.restore();
+  // ROTATION HANDLE
+  const rotX = x;
+  const rotY = y - height/2 - ROTATE_DIST;
 
+  ctx.beginPath();
+  ctx.moveTo(x, y - height/2);
+  ctx.lineTo(rotX, rotY);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.arc(rotX, rotY, 6, 0, Math.PI*2);
+  ctx.fill();
+
+  ctx.restore();
 }
+
 // =======================
 // Transform Interaction
 // =======================
@@ -1708,39 +1764,82 @@ const HANDLE_SIZE = 8;
 const ROTATE_DIST = 15;
 
 function getHandleUnderMouse(obj, mouseX, mouseY) {
-  if (!obj || !obj.transform) return null;
-  const t = obj.transform;
 
+  // --- MULTI SELECTION ---
+  if (multiSelection.length > 1) {
+
+    const bounds = getMultiSelectionBounds();
+    if (!bounds) return null;
+
+    const width = bounds.width;
+    const height = bounds.height;
+
+    const localX = mouseX - bounds.x;
+    const localY = mouseY - bounds.y;
+
+    // rotation handle
+    const rotX = 0;
+    const rotY = -height / 2 - ROTATE_DIST;
+
+    if (Math.hypot(localX - rotX, localY - rotY) <= HANDLE_SIZE) {
+      return { type: "rotate" };
+    }
+
+    const corners = [
+      [-width/2, -height/2],
+      [ width/2, -height/2],
+      [ width/2,  height/2],
+      [-width/2,  height/2]
+    ];
+
+    for (let i = 0; i < corners.length; i++) {
+      const [cx, cy] = corners[i];
+      if (Math.abs(localX - cx) <= HANDLE_SIZE &&
+          Math.abs(localY - cy) <= HANDLE_SIZE) {
+        return { type: "resize", corner: i };
+      }
+    }
+
+    return null;
+  }
+
+  // --- SINGLE OBJECT (original behavior) ---
+  if (!obj || !obj.transform) return null;
+
+  const t = obj.transform;
   const box = getObjectBoundingBox(obj);
+
   const width = box.width * (t.scaleX ?? 1);
   const height = box.height * (t.scaleY ?? 1);
 
-  // convert mouse to object local space
   let dx = mouseX - t.x;
   let dy = mouseY - t.y;
+
   const sin = Math.sin(-t.rotation);
   const cos = Math.cos(-t.rotation);
+
   let localX = dx * cos - dy * sin;
   let localY = dx * sin + dy * cos;
 
-  // rotation handle
   const rotX = 0;
-  const rotY = -height / 2 - ROTATE_DIST;
+  const rotY = -height/2 - ROTATE_DIST;
+
   if (Math.hypot(localX - rotX, localY - rotY) <= HANDLE_SIZE) {
     return { type: "rotate" };
   }
 
-  // corner handles
   const corners = [
-    [-width / 2, -height / 2],
-    [ width / 2, -height / 2],
-    [ width / 2,  height / 2],
-    [-width / 2,  height / 2]
+    [-width/2, -height/2],
+    [ width/2, -height/2],
+    [ width/2,  height/2],
+    [-width/2,  height/2]
   ];
 
   for (let i = 0; i < corners.length; i++) {
     const [cx, cy] = corners[i];
-    if (Math.abs(localX - cx) <= HANDLE_SIZE && Math.abs(localY - cy) <= HANDLE_SIZE) {
+
+    if (Math.abs(localX - cx) <= HANDLE_SIZE &&
+        Math.abs(localY - cy) <= HANDLE_SIZE) {
       return { type: "resize", corner: i };
     }
   }
